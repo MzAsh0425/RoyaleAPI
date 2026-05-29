@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-size: 13px;
+  }
+
+  /* ---- 操作パネル ---- */
+  .controls {
+    position: sticky; top: 0; z-index: 10;
+    background: #16213e;
+    padding: 10px;
+    border-bottom: 1px solid #0f3460;
+  }
+  .btn-row { display: flex; gap: 6px; margin-bottom: 8px; }
+  .btn {
+    flex: 1; padding: 8px 4px; border: none; border-radius: 6px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn-clear { background: #e74c3c; color: #fff; }
+  .btn-undo  { background: #f39c12; color: #fff; }
+
+  /* ---- 検索 ---- */
+  .search-box {
+    width: 100%; padding: 8px 10px; border: 1px solid #0f3460;
+    border-radius: 6px; background: #1a1a2e; color: #e0e0e0;
+    font-size: 13px; outline: none;
+  }
+  .search-box:focus { border-color: #e94560; }
+  .search-box::placeholder { color: #666; }
+
+  /* ---- ソート & フィルタ ---- */
+  .filter-row {
+    display: flex; gap: 4px; margin-top: 8px; flex-wrap: wrap;
+  }
+  .filter-btn {
+    padding: 5px 8px; border: 1px solid #0f3460; border-radius: 4px;
+    background: transparent; color: #aaa; cursor: pointer;
+    font-size: 11px; transition: all 0.15s;
+  }
+  .filter-btn.active {
+    background: #e94560; color: #fff; border-color: #e94560;
+  }
+
+  /* ---- ステータス ---- */
+  .status {
+    padding: 6px 10px; font-size: 11px; color: #aaa;
+    background: #16213e; border-bottom: 1px solid #0f3460;
+    min-height: 28px;
+  }
+  .status .cell-value {
+    color: #4ecca3; font-weight: 600;
+    word-break: break-all;
+  }
+
+  /* ---- カードグリッド ---- */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    padding: 8px;
+  }
+  .card-item {
+    display: flex; flex-direction: column; align-items: center;
+    padding: 6px 2px; border-radius: 8px; cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    border: 1px solid transparent;
+  }
+  .card-item:hover {
+    background: #0f3460; transform: scale(1.05);
+    border-color: #e94560;
+  }
+  .card-item.added {
+    opacity: 0.35; pointer-events: none;
+  }
+  .card-item img {
+    width: 48px; height: 56px; object-fit: contain;
+  }
+  .card-item .card-name {
+    font-size: 9px; text-align: center; margin-top: 2px;
+    line-height: 1.2; color: #ccc; max-width: 64px;
+    overflow: hidden; text-overflow: ellipsis;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .card-item .elixir-badge {
+    font-size: 9px; font-weight: 700; color: #e94560;
+  }
+
+  /* ---- メッセージ ---- */
+  .toast {
+    position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+    background: #e94560; color: #fff; padding: 8px 16px;
+    border-radius: 6px; font-size: 12px; z-index: 100;
+    opacity: 0; transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<!-- 操作パネル -->
+<div class="controls">
+  <div class="btn-row">
+    <button class="btn btn-clear" onclick="clearCell()">セルをクリア</button>
+    <button class="btn btn-undo" onclick="undoLast()">1つ戻る</button>
+  </div>
+  <input type="text" class="search-box" id="search" placeholder="カード名で検索..." oninput="filterCards()">
+  <div class="filter-row">
+    <button class="filter-btn active" data-sort="alpha" onclick="setSort('alpha')">A-Z順</button>
+    <button class="filter-btn" data-sort="elixir" onclick="setSort('elixir')">コスト順</button>
+    <span style="width:8px"></span>
+    <button class="filter-btn active" data-type="all" onclick="setType('all')">全て</button>
+    <button class="filter-btn" data-type="common" onclick="setType('common')">Common</button>
+    <button class="filter-btn" data-type="rare" onclick="setType('rare')">Rare</button>
+    <button class="filter-btn" data-type="epic" onclick="setType('epic')">Epic</button>
+    <button class="filter-btn" data-type="legendary" onclick="setType('legendary')">Legen.</button>
+    <button class="filter-btn" data-type="champion" onclick="setType('champion')">Champ.</button>
+  </div>
+</div>
+
+<!-- ステータス -->
+<div class="status" id="status">
+  セルの内容: <span class="cell-value" id="cellValue">-</span>
+</div>
+
+<!-- カードグリッド -->
+<div class="card-grid" id="cardGrid"></div>
+
+<!-- トースト通知 -->
+<div class="toast" id="toast"></div>
+
+<script>
+var allCards = [];
+var currentSort = "alpha";
+var currentType = "all";
+var addedCards = new Set();
+
+// ---- 初期化 ----
+google.script.run.withSuccessHandler(function(cards) {
+  allCards = cards || [];
+  renderCards();
+}).getCardMaster();
+
+// ---- カード描画 ----
+function renderCards() {
+  var query = document.getElementById("search").value.toLowerCase();
+  var filtered = allCards.filter(function(c) {
+    if (query && c.name.toLowerCase().indexOf(query) === -1) return false;
+    if (currentType !== "all" && c.rarity.toLowerCase() !== currentType) return false;
+    return true;
+  });
+
+  if (currentSort === "elixir") {
+    filtered.sort(function(a, b) {
+      var ea = a.elixirCost || 99, eb = b.elixirCost || 99;
+      return ea - eb || a.name.localeCompare(b.name);
+    });
+  } else {
+    filtered.sort(function(a, b) { return a.name.localeCompare(b.name); });
+  }
+
+  var grid = document.getElementById("cardGrid");
+  grid.innerHTML = "";
+  filtered.forEach(function(card) {
+    var div = document.createElement("div");
+    div.className = "card-item" + (addedCards.has(card.name) ? " added" : "");
+    div.onclick = function() { appendCard(card.name); };
+
+    var img = document.createElement("img");
+    img.src = card.iconUrl;
+    img.alt = card.name;
+    img.loading = "lazy";
+    div.appendChild(img);
+
+    if (card.elixirCost != null) {
+      var badge = document.createElement("span");
+      badge.className = "elixir-badge";
+      badge.textContent = card.elixirCost + " elixir";
+      div.appendChild(badge);
+    }
+
+    var nameEl = document.createElement("span");
+    nameEl.className = "card-name";
+    nameEl.textContent = card.name;
+    div.appendChild(nameEl);
+
+    grid.appendChild(div);
+  });
+}
+
+// ---- カード追記 ----
+function appendCard(name) {
+  google.script.run
+    .withSuccessHandler(function(result) {
+      updateStatus(result.value);
+      if (result.success) {
+        addedCards.add(name);
+        showToast("+ " + name);
+      } else {
+        showToast(result.message);
+      }
+      renderCards();
+    })
+    .appendCardToCell(name);
+}
+
+// ---- セルクリア ----
+function clearCell() {
+  google.script.run
+    .withSuccessHandler(function(result) {
+      updateStatus(result.value);
+      addedCards.clear();
+      showToast("セルをクリアしました");
+      renderCards();
+    })
+    .clearCell();
+}
+
+// ---- 1つ戻る ----
+function undoLast() {
+  google.script.run
+    .withSuccessHandler(function(result) {
+      updateStatus(result.value);
+      if (result.success && result.removed) {
+        addedCards.delete(result.removed);
+        showToast("- " + result.removed);
+      } else if (result.message) {
+        showToast(result.message);
+      }
+      renderCards();
+    })
+    .undoLastCard();
+}
+
+// ---- ソート切替 ----
+function setSort(mode) {
+  currentSort = mode;
+  document.querySelectorAll("[data-sort]").forEach(function(btn) {
+    btn.classList.toggle("active", btn.dataset.sort === mode);
+  });
+  renderCards();
+}
+
+// ---- タイプフィルタ切替 ----
+function setType(type) {
+  currentType = type;
+  document.querySelectorAll("[data-type]").forEach(function(btn) {
+    btn.classList.toggle("active", btn.dataset.type === type);
+  });
+  renderCards();
+}
+
+// ---- 検索 ----
+function filterCards() { renderCards(); }
+
+// ---- ステータス更新 ----
+function updateStatus(value) {
+  document.getElementById("cellValue").textContent = value || "(空)";
+}
+
+// ---- トースト通知 ----
+function showToast(msg) {
+  var el = document.getElementById("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  setTimeout(function() { el.classList.remove("show"); }, 1500);
+}
+</script>
+</body>
+</html>

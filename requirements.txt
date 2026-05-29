@@ -1,0 +1,7 @@
+streamlit
+pandas
+gspread
+google-auth
+python-dotenv
+plotly
+requests
