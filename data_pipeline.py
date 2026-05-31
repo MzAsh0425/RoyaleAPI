@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 HEADERS = [
     "MatchID", "Timestamp", "GameMode", "MyDeck_Raw",
     "OpponentDeck_Raw", "Result", "MyCrowns", "OpponentCrowns",
-    "MyTrophy", "OpponentTrophy",
+    "MyTrophy", "OpponentTrophy", "MyTower", "OpponentTower",
 ]
 
 EXCLUDED_BATTLE_TYPES = {"friendly"}
@@ -113,6 +113,18 @@ def generate_match_id(battle_time: str, my_tag: str, opp_tag: str) -> str:
     return hashlib.md5(raw.encode()).hexdigest()[:16]
 
 
+def extract_tower_troop(player: dict) -> str:
+    """supportCardsからタワートループ名を取り出す。存在しない場合はUnknownを返す。"""
+    support_cards = player.get("supportCards") or []
+    if not isinstance(support_cards, list) or not support_cards:
+        return "Unknown"
+
+    for card in support_cards:
+        if isinstance(card, dict) and card.get("name"):
+            return card["name"]
+    return "Unknown"
+
+
 # ==========================================
 # 4. バトルログ整形
 # ==========================================
@@ -132,6 +144,8 @@ def process_battle_log(raw_data: list[dict]) -> list[list]:
 
         my_cards = ", ".join(card["name"] for card in team["cards"])
         opp_cards = ", ".join(card["name"] for card in opponent["cards"])
+        my_tower = extract_tower_troop(team)
+        opponent_tower = extract_tower_troop(opponent)
 
         if team["crowns"] > opponent["crowns"]:
             result = "Win"
@@ -151,6 +165,8 @@ def process_battle_log(raw_data: list[dict]) -> list[list]:
             opponent["crowns"],
             team.get("startingTrophies", ""),
             opponent.get("startingTrophies", ""),
+            my_tower,
+            opponent_tower,
         ]
         rows.append(row)
 
@@ -189,6 +205,12 @@ def get_or_create_worksheet(
         worksheet = spreadsheet.add_worksheet(title=sheet_name, rows=1000, cols=len(HEADERS))
         worksheet.append_row(HEADERS)
         logger.info("新規ワークシート '%s' を作成しヘッダーを初期化", sheet_name)
+    else:
+        existing_headers = worksheet.row_values(1)
+        if existing_headers != HEADERS:
+            worksheet.resize(cols=max(len(existing_headers), len(HEADERS)))
+            worksheet.update("A1", [HEADERS])
+            logger.info("ワークシート '%s' のヘッダーを更新しました", sheet_name)
     return worksheet
 
 

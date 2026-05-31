@@ -133,15 +133,30 @@ CARD_NAME_EN_TO_JA: dict[str, str] = {
     "Suspicious Bush": "ステルスブッシュ",
     "Vines": "ヴァイン",
     "Void": "ヴォイド",
+    # --- タワートループ ---
+    "Tower Princess": "タワープリンセス",
+    "Cannoneer": "ブラスター",
+    "Dagger Duchess": "ダガーガール",
+    "Baby Goblin": "ベビーゴブリン",
 }
 
 
 def translate_card(name_en: str) -> str:
     """英語カード名を日本語に変換する。辞書にない場合は英語名をそのまま返す。"""
+    if name_en is None:
+        return "Unknown"
+    name_en = str(name_en)
+    if name_en.strip() == "" or name_en.strip().lower() == "nan":
+        return "Unknown"
     return CARD_NAME_EN_TO_JA.get(name_en.strip(), name_en.strip())
 
 
 def translate_deck(deck_raw: str) -> str:
     """カンマ区切りのデッキ文字列を日本語に変換する。"""
+    if deck_raw is None:
+        return "Unknown"
+    deck_raw = str(deck_raw)
+    if deck_raw.strip() == "" or deck_raw.strip().lower() == "nan":
+        return "Unknown"
     cards = deck_raw.split(",")
     return ", ".join(translate_card(c) for c in cards)

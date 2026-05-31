@@ -21,6 +21,7 @@ load_dotenv()
 
 ARCHETYPE_SHEET_NAME = "Archetype_Dict"
 SYSTEM_SHEETS = {"Archetype_Dict", "CardMaster"}
+TOWER_COLUMNS = ["MyTower", "OpponentTower"]
 
 # ==========================================
 # ページ設定
@@ -87,6 +88,10 @@ def load_player_data(spreadsheet_key: str, sheet_name: str) -> pd.DataFrame:
     if not records:
         return pd.DataFrame()
     df = pd.DataFrame(records)
+    for col in TOWER_COLUMNS:
+        if col not in df.columns:
+            df[col] = "Unknown"
+        df[col] = df[col].replace("", "Unknown").fillna("Unknown")
     df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y/%m/%d %H:%M")
     df["MyCrowns"] = pd.to_numeric(df["MyCrowns"], errors="coerce")
     df["OpponentCrowns"] = pd.to_numeric(df["OpponentCrowns"], errors="coerce")
@@ -138,6 +143,9 @@ def classify_archetype(deck_raw: str, archetype_df: pd.DataFrame) -> str:
     """辞書DataFrameのルールに基づき相手デッキのアーキタイプを判定する。"""
     if archetype_df.empty:
         return "Other"
+    if deck_raw is None or str(deck_raw).strip() == "":
+        return "Other"
+    deck_raw = str(deck_raw)
     deck_cards = {c.strip() for c in deck_raw.split(",")}
     for _, row in archetype_df.iterrows():
         key_cards = {c.strip() for c in str(row["KeyCards"]).split(",")}
@@ -497,7 +505,98 @@ def render_eda_analytics(df: pd.DataFrame):
     st.divider()
 
     # ==============================================
-    # C-2. 曜日×時間帯ヒートマップ
+    # C-2. タワートループ分析
+    # ==============================================
+    st.header("🏰 タワートループ分析")
+
+    df_tower = df.copy()
+    for col in TOWER_COLUMNS:
+        if col not in df_tower.columns:
+            df_tower[col] = "Unknown"
+        df_tower[col] = df_tower[col].replace("", "Unknown").fillna("Unknown")
+        df_tower[f"{col}_JA"] = df_tower[col].apply(translate_card)
+
+    df_tower["IsWin"] = (df_tower["Result"] == "Win").astype(int)
+
+    tower_stats = df_tower.groupby("OpponentTower_JA").agg(
+        試合数=("Result", "size"),
+        勝利数=("IsWin", "sum"),
+        勝率=("IsWin", "mean"),
+    ).reset_index()
+    tower_stats["勝率"] = (tower_stats["勝率"] * 100).round(1)
+    tower_stats = tower_stats.sort_values("試合数", ascending=False).reset_index(drop=True)
+    tower_stats = tower_stats.rename(columns={"OpponentTower_JA": "相手のタワー"})
+
+    col_chart, col_table = st.columns([2, 1])
+    with col_chart:
+        fig_tower = px.bar(
+            tower_stats, x="相手のタワー", y="勝率",
+            text="勝率", color="勝率",
+            color_continuous_scale=["#e74c3c", "#f39c12", "#2ecc71"],
+            labels={"勝率": "勝率 (%)"},
+        )
+        fig_tower.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+        fig_tower.update_layout(
+            showlegend=False, coloraxis_showscale=False,
+            yaxis_range=[0, max(tower_stats["勝率"].max() + 15, 100)],
+            height=380,
+        )
+        st.plotly_chart(fig_tower, use_container_width=True)
+    with col_table:
+        st.dataframe(
+            tower_stats[["相手のタワー", "試合数", "勝利数", "勝率"]]
+                .style.format({"勝率": "{:.1f}%"}),
+            use_container_width=True, hide_index=True,
+        )
+
+    my_tower_stats = df_tower.groupby("MyTower_JA").agg(
+        試合数=("Result", "size"),
+        勝利数=("IsWin", "sum"),
+        勝率=("IsWin", "mean"),
+    ).reset_index()
+    my_tower_stats["勝率"] = (my_tower_stats["勝率"] * 100).round(1)
+    my_tower_stats = my_tower_stats.sort_values("試合数", ascending=False)
+    my_tower_stats = my_tower_stats.rename(columns={"MyTower_JA": "自分のタワー"})
+
+    with st.expander("自分のタワー別使用状況"):
+        st.dataframe(
+            my_tower_stats[["自分のタワー", "試合数", "勝利数", "勝率"]]
+                .style.format({"勝率": "{:.1f}%"}),
+            use_container_width=True, hide_index=True,
+        )
+
+    st.subheader("自分のデッキ × 相手タワー 勝率")
+    deck_counts = df_tower["MyDeck_Raw"].value_counts()
+    valid_decks = deck_counts[deck_counts >= 1].index
+    df_tower_matrix = df_tower[df_tower["MyDeck_Raw"].isin(valid_decks)].copy()
+
+    if df_tower_matrix.empty:
+        st.info("タワートループ分析に使えるデータがありません。")
+    else:
+        pivot_rate = pd.pivot_table(
+            df_tower_matrix, values="IsWin", index="MyDeck_Raw",
+            columns="OpponentTower_JA", aggfunc="mean",
+        ).mul(100).round(1)
+        pivot_count = pd.pivot_table(
+            df_tower_matrix, values="IsWin", index="MyDeck_Raw",
+            columns="OpponentTower_JA", aggfunc="count",
+        ).fillna(0).astype(int)
+
+        display = pd.DataFrame(index=pivot_rate.index, columns=pivot_rate.columns, dtype=str)
+        for col in display.columns:
+            for idx in display.index:
+                rate = pivot_rate.at[idx, col] if pd.notna(pivot_rate.at[idx, col]) else None
+                count = pivot_count.at[idx, col] if idx in pivot_count.index and col in pivot_count.columns else 0
+                display.at[idx, col] = f"{rate:.0f}% ({int(count)})" if rate is not None and count > 0 else "-"
+
+        display.index = [translate_deck(d) for d in display.index]
+        display.index.name = "自分のデッキ"
+        st.dataframe(display, use_container_width=True)
+
+    st.divider()
+
+    # ==============================================
+    # C-3. 曜日×時間帯ヒートマップ
     # ==============================================
     st.header("📅 曜日×時間帯パフォーマンス")
 
@@ -548,7 +647,7 @@ def render_eda_analytics(df: pd.DataFrame):
     st.divider()
 
     # ==============================================
-    # C-3. メンタル・ティルト分析
+    # C-4. メンタル・ティルト分析
     # ==============================================
     st.header("🧠 メンタル・ティルト分析")
 
@@ -638,7 +737,7 @@ def render_eda_analytics(df: pd.DataFrame):
     st.divider()
 
     # ==============================================
-    # C-4. カード共起分析（環境シナジー）
+    # C-5. カード共起分析（環境シナジー）
     # ==============================================
     st.header("🔗 カード共起分析（環境シナジー）")
     st.caption("相手のデッキ内でよく一緒に採用されるカードの組み合わせ")
