@@ -517,58 +517,64 @@ def render_eda_analytics(df: pd.DataFrame):
         df_tower[f"{col}_JA"] = df_tower[col].apply(translate_card)
 
     df_tower["IsWin"] = (df_tower["Result"] == "Win").astype(int)
+    df_tower_known_opp = df_tower[df_tower["OpponentTower"] != "Unknown"].copy()
 
-    tower_stats = df_tower.groupby("OpponentTower_JA").agg(
+    if df_tower_known_opp.empty:
+        st.info("相手タワーが記録されたデータがまだありません。")
+    else:
+        tower_stats = df_tower_known_opp.groupby("OpponentTower_JA").agg(
+            試合数=("Result", "size"),
+            勝利数=("IsWin", "sum"),
+            勝率=("IsWin", "mean"),
+        ).reset_index()
+        tower_stats["勝率"] = (tower_stats["勝率"] * 100).round(1)
+        tower_stats = tower_stats.sort_values("試合数", ascending=False).reset_index(drop=True)
+        tower_stats = tower_stats.rename(columns={"OpponentTower_JA": "相手のタワー"})
+
+        col_chart, col_table = st.columns([2, 1])
+        with col_chart:
+            fig_tower = px.bar(
+                tower_stats, x="相手のタワー", y="勝率",
+                text="勝率", color="勝率",
+                color_continuous_scale=["#e74c3c", "#f39c12", "#2ecc71"],
+                labels={"勝率": "勝率 (%)"},
+            )
+            fig_tower.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+            fig_tower.update_layout(
+                showlegend=False, coloraxis_showscale=False,
+                yaxis_range=[0, max(tower_stats["勝率"].max() + 15, 100)],
+                height=380,
+            )
+            st.plotly_chart(fig_tower, use_container_width=True)
+        with col_table:
+            st.dataframe(
+                tower_stats[["相手のタワー", "試合数", "勝利数", "勝率"]]
+                    .style.format({"勝率": "{:.1f}%"}),
+                use_container_width=True, hide_index=True,
+            )
+
+    df_tower_known_my = df_tower[df_tower["MyTower"] != "Unknown"].copy()
+    my_tower_stats = df_tower_known_my.groupby("MyTower_JA").agg(
         試合数=("Result", "size"),
         勝利数=("IsWin", "sum"),
         勝率=("IsWin", "mean"),
     ).reset_index()
-    tower_stats["勝率"] = (tower_stats["勝率"] * 100).round(1)
-    tower_stats = tower_stats.sort_values("試合数", ascending=False).reset_index(drop=True)
-    tower_stats = tower_stats.rename(columns={"OpponentTower_JA": "相手のタワー"})
+    if not my_tower_stats.empty:
+        my_tower_stats["勝率"] = (my_tower_stats["勝率"] * 100).round(1)
+        my_tower_stats = my_tower_stats.sort_values("試合数", ascending=False)
+        my_tower_stats = my_tower_stats.rename(columns={"MyTower_JA": "自分のタワー"})
 
-    col_chart, col_table = st.columns([2, 1])
-    with col_chart:
-        fig_tower = px.bar(
-            tower_stats, x="相手のタワー", y="勝率",
-            text="勝率", color="勝率",
-            color_continuous_scale=["#e74c3c", "#f39c12", "#2ecc71"],
-            labels={"勝率": "勝率 (%)"},
-        )
-        fig_tower.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-        fig_tower.update_layout(
-            showlegend=False, coloraxis_showscale=False,
-            yaxis_range=[0, max(tower_stats["勝率"].max() + 15, 100)],
-            height=380,
-        )
-        st.plotly_chart(fig_tower, use_container_width=True)
-    with col_table:
-        st.dataframe(
-            tower_stats[["相手のタワー", "試合数", "勝利数", "勝率"]]
-                .style.format({"勝率": "{:.1f}%"}),
-            use_container_width=True, hide_index=True,
-        )
-
-    my_tower_stats = df_tower.groupby("MyTower_JA").agg(
-        試合数=("Result", "size"),
-        勝利数=("IsWin", "sum"),
-        勝率=("IsWin", "mean"),
-    ).reset_index()
-    my_tower_stats["勝率"] = (my_tower_stats["勝率"] * 100).round(1)
-    my_tower_stats = my_tower_stats.sort_values("試合数", ascending=False)
-    my_tower_stats = my_tower_stats.rename(columns={"MyTower_JA": "自分のタワー"})
-
-    with st.expander("自分のタワー別使用状況"):
-        st.dataframe(
-            my_tower_stats[["自分のタワー", "試合数", "勝利数", "勝率"]]
-                .style.format({"勝率": "{:.1f}%"}),
-            use_container_width=True, hide_index=True,
-        )
+        with st.expander("自分のタワー別使用状況"):
+            st.dataframe(
+                my_tower_stats[["自分のタワー", "試合数", "勝利数", "勝率"]]
+                    .style.format({"勝率": "{:.1f}%"}),
+                use_container_width=True, hide_index=True,
+            )
 
     st.subheader("自分のデッキ × 相手タワー 勝率")
-    deck_counts = df_tower["MyDeck_Raw"].value_counts()
+    deck_counts = df_tower_known_opp["MyDeck_Raw"].value_counts()
     valid_decks = deck_counts[deck_counts >= 1].index
-    df_tower_matrix = df_tower[df_tower["MyDeck_Raw"].isin(valid_decks)].copy()
+    df_tower_matrix = df_tower_known_opp[df_tower_known_opp["MyDeck_Raw"].isin(valid_decks)].copy()
 
     if df_tower_matrix.empty:
         st.info("タワートループ分析に使えるデータがありません。")
