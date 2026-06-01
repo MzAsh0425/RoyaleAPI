@@ -606,53 +606,64 @@ def render_eda_analytics(df: pd.DataFrame):
         display.index.name = "自分のデッキ"
         st.dataframe(display, use_container_width=True)
 
-    st.subheader("相手タワー別 相手デッキ使用ランキング")
+    st.subheader("相手タワー別 相手カード使用ランキング")
     if df_tower_known_opp.empty:
         st.info("相手タワーが記録されたデータがまだありません。")
     else:
-        top_decks_per_tower = st.slider(
-            "タワーごとに表示する相手デッキ数",
+        top_cards_per_tower = st.slider(
+            "タワーごとに表示する相手カード数",
             min_value=1,
-            max_value=10,
-            value=5,
-            key="opp_tower_deck_top_n",
+            max_value=20,
+            value=10,
+            key="opp_tower_card_top_n",
         )
 
         tower_totals = df_tower_known_opp.groupby("OpponentTower_JA").size()
-        opponent_deck_by_tower = df_tower_known_opp.groupby(
-            ["OpponentTower_JA", "OpponentDeck_Raw"]
+        opponent_card_by_tower = df_tower_known_opp.copy()
+        opponent_card_by_tower["OpponentCard"] = opponent_card_by_tower["OpponentDeck_Raw"].apply(
+            lambda deck: [
+                card.strip()
+                for card in str(deck).split(",")
+                if card.strip()
+            ]
+        )
+        opponent_card_by_tower = opponent_card_by_tower.explode("OpponentCard")
+        opponent_card_by_tower = opponent_card_by_tower.dropna(subset=["OpponentCard"])
+
+        opponent_card_by_tower = opponent_card_by_tower.groupby(
+            ["OpponentTower_JA", "OpponentCard"]
         ).agg(
             使用回数=("Result", "size"),
             勝利数=("IsWin", "sum"),
         ).reset_index()
-        opponent_deck_by_tower["採用率"] = (
-            opponent_deck_by_tower["使用回数"]
-            / opponent_deck_by_tower["OpponentTower_JA"].map(tower_totals)
+        opponent_card_by_tower["採用率"] = (
+            opponent_card_by_tower["使用回数"]
+            / opponent_card_by_tower["OpponentTower_JA"].map(tower_totals)
             * 100
         ).round(1)
-        opponent_deck_by_tower["こちらの勝率"] = (
-            opponent_deck_by_tower["勝利数"] / opponent_deck_by_tower["使用回数"] * 100
+        opponent_card_by_tower["こちらの勝率"] = (
+            opponent_card_by_tower["勝利数"] / opponent_card_by_tower["使用回数"] * 100
         ).round(1)
-        opponent_deck_by_tower = opponent_deck_by_tower.sort_values(
+        opponent_card_by_tower = opponent_card_by_tower.sort_values(
             ["OpponentTower_JA", "使用回数", "採用率"],
             ascending=[True, False, False],
         )
-        opponent_deck_by_tower = opponent_deck_by_tower.groupby(
+        opponent_card_by_tower = opponent_card_by_tower.groupby(
             "OpponentTower_JA", group_keys=False
-        ).head(top_decks_per_tower)
-        opponent_deck_by_tower = opponent_deck_by_tower.rename(
+        ).head(top_cards_per_tower)
+        opponent_card_by_tower = opponent_card_by_tower.rename(
             columns={
                 "OpponentTower_JA": "相手のタワー",
-                "OpponentDeck_Raw": "相手のデッキ",
+                "OpponentCard": "相手のカード",
             }
         )
-        opponent_deck_by_tower["相手のデッキ"] = opponent_deck_by_tower["相手のデッキ"].apply(
-            translate_deck
+        opponent_card_by_tower["相手のカード"] = opponent_card_by_tower["相手のカード"].apply(
+            translate_card
         )
 
         st.dataframe(
-            opponent_deck_by_tower[
-                ["相手のタワー", "相手のデッキ", "使用回数", "採用率", "こちらの勝率"]
+            opponent_card_by_tower[
+                ["相手のタワー", "相手のカード", "使用回数", "採用率", "こちらの勝率"]
             ].style.format({"採用率": "{:.1f}%", "こちらの勝率": "{:.1f}%"}),
             use_container_width=True,
             hide_index=True,
