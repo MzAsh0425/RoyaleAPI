@@ -453,6 +453,7 @@ TROPHY_BINS = [-9999, -100, -30, 30, 100, 9999]
 TROPHY_LABELS = ["格下 (< -100)", "やや格下 (-100~-30)", "同格 (-29~+29)", "やや格上 (+30~+99)", "格上 (100+)"]
 
 DAY_NAMES = ["月", "火", "水", "木", "金", "土", "日"]
+HOURS_24 = list(range(24))
 
 
 def render_eda_analytics(df: pd.DataFrame):
@@ -599,6 +600,58 @@ def render_eda_analytics(df: pd.DataFrame):
         display.index.name = "自分のデッキ"
         st.dataframe(display, use_container_width=True)
 
+    st.subheader("相手タワー別 相手デッキ使用ランキング")
+    if df_tower_known_opp.empty:
+        st.info("相手タワーが記録されたデータがまだありません。")
+    else:
+        top_decks_per_tower = st.slider(
+            "タワーごとに表示する相手デッキ数",
+            min_value=1,
+            max_value=10,
+            value=5,
+            key="opp_tower_deck_top_n",
+        )
+
+        tower_totals = df_tower_known_opp.groupby("OpponentTower_JA").size()
+        opponent_deck_by_tower = df_tower_known_opp.groupby(
+            ["OpponentTower_JA", "OpponentDeck_Raw"]
+        ).agg(
+            使用回数=("Result", "size"),
+            勝利数=("IsWin", "sum"),
+        ).reset_index()
+        opponent_deck_by_tower["採用率"] = (
+            opponent_deck_by_tower["使用回数"]
+            / opponent_deck_by_tower["OpponentTower_JA"].map(tower_totals)
+            * 100
+        ).round(1)
+        opponent_deck_by_tower["こちらの勝率"] = (
+            opponent_deck_by_tower["勝利数"] / opponent_deck_by_tower["使用回数"] * 100
+        ).round(1)
+        opponent_deck_by_tower = opponent_deck_by_tower.sort_values(
+            ["OpponentTower_JA", "使用回数", "採用率"],
+            ascending=[True, False, False],
+        )
+        opponent_deck_by_tower = opponent_deck_by_tower.groupby(
+            "OpponentTower_JA", group_keys=False
+        ).head(top_decks_per_tower)
+        opponent_deck_by_tower = opponent_deck_by_tower.rename(
+            columns={
+                "OpponentTower_JA": "相手のタワー",
+                "OpponentDeck_Raw": "相手のデッキ",
+            }
+        )
+        opponent_deck_by_tower["相手のデッキ"] = opponent_deck_by_tower["相手のデッキ"].apply(
+            translate_deck
+        )
+
+        st.dataframe(
+            opponent_deck_by_tower[
+                ["相手のタワー", "相手のデッキ", "使用回数", "採用率", "こちらの勝率"]
+            ].style.format({"採用率": "{:.1f}%", "こちらの勝率": "{:.1f}%"}),
+            use_container_width=True,
+            hide_index=True,
+        )
+
     st.divider()
 
     # ==============================================
@@ -616,21 +669,21 @@ def render_eda_analytics(df: pd.DataFrame):
     pivot_wr = pd.pivot_table(
         df_dt, values="IsWin", index="DayOfWeek", columns="Hour",
         aggfunc="mean",
-    ).mul(100).round(1)
+    ).reindex(index=range(7), columns=HOURS_24).mul(100).round(1)
     pivot_wr.index = [DAY_NAMES[i] for i in pivot_wr.index]
 
     # 試合数ピボット（ホバーテキスト用）
     pivot_cnt = pd.pivot_table(
         df_dt, values="IsWin", index="DayOfWeek", columns="Hour",
         aggfunc="count",
-    ).fillna(0).astype(int)
+    ).reindex(index=range(7), columns=HOURS_24).fillna(0).astype(int)
     pivot_cnt.index = [DAY_NAMES[i] for i in pivot_cnt.index]
 
     # カスタムホバーテキスト
     hover_text = []
     for day in pivot_wr.index:
         row_text = []
-        for hour in pivot_wr.columns:
+        for hour in HOURS_24:
             wr = pivot_wr.at[day, hour] if pd.notna(pivot_wr.at[day, hour]) else 0
             cnt = pivot_cnt.at[day, hour] if day in pivot_cnt.index and hour in pivot_cnt.columns else 0
             row_text.append(f"{day} {hour}時<br>勝率: {wr:.0f}%<br>試合数: {int(cnt)}")
@@ -638,7 +691,7 @@ def render_eda_analytics(df: pd.DataFrame):
 
     fig_hm = go.Figure(data=go.Heatmap(
         z=pivot_wr.values,
-        x=[f"{h}時" for h in pivot_wr.columns],
+        x=[f"{h}時" for h in HOURS_24],
         y=pivot_wr.index,
         text=hover_text,
         hoverinfo="text",
