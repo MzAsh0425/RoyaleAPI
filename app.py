@@ -289,7 +289,10 @@ def render_basic_analytics(df: pd.DataFrame, df_all: pd.DataFrame):
         勝利数=("Result", lambda x: (x == "Win").sum()),
     ).reset_index()
     deck_stats["勝率"] = (deck_stats["勝利数"] / deck_stats["使用回数"] * 100).round(1)
-    deck_stats = deck_stats.sort_values("使用回数", ascending=False).reset_index(drop=True)
+    deck_stats = deck_stats.sort_values(
+        ["勝率", "使用回数"],
+        ascending=[False, False],
+    ).reset_index(drop=True)
     deck_stats.index += 1
     deck_stats = deck_stats.rename(columns={"MyDeck_Raw": "デッキ"})
     deck_stats["デッキ"] = deck_stats["デッキ"].apply(translate_deck)
@@ -400,56 +403,75 @@ def render_matchup_analytics(df: pd.DataFrame):
 
     # --- B-3. 特定カード天敵・シナジー分析 ---
     st.header("🔍 特定カード天敵・シナジー分析")
-    st.caption("相手のデッキに特定カードが含まれていた場合の勝率変動")
+    st.caption("相手のデッキに各カードが含まれていた場合のこちらの勝率。低い順に天敵候補として表示")
 
     all_opp_cards_en = set()
     for deck in df["OpponentDeck_Raw"]:
-        for card in deck.split(","):
-            all_opp_cards_en.add(card.strip())
+        for card in str(deck).split(","):
+            card = card.strip()
+            if card:
+                all_opp_cards_en.add(card)
     all_opp_cards_en = sorted(all_opp_cards_en)
 
-    # 日本語名でドロップダウン表示 → 英語名に逆引き
-    ja_to_en = {translate_card(c): c for c in all_opp_cards_en}
-    card_options_ja = sorted(ja_to_en.keys())
+    if not all_opp_cards_en:
+        st.info("相手デッキのカードデータがありません。")
+    else:
+        df_card = df.copy()
+        df_card["OpponentCards"] = df_card["OpponentDeck_Raw"].apply(
+            lambda deck: {
+                card.strip()
+                for card in str(deck).split(",")
+                if card.strip()
+            }
+        )
 
-    selected_card_ja = st.selectbox("分析するカードを選択", card_options_ja, key="card_select")
-    selected_card_en = ja_to_en[selected_card_ja]
+        card_rows = []
+        for card in all_opp_cards_en:
+            if not card:
+                continue
+            with_card = df_card["OpponentCards"].apply(lambda cards: card in cards)
+            df_with = df_card[with_card]
+            df_without = df_card[~with_card]
 
-    df_with = df[df["OpponentDeck_Raw"].str.contains(selected_card_en, regex=False)]
-    df_without = df[~df["OpponentDeck_Raw"].str.contains(selected_card_en, regex=False)]
+            games_with = len(df_with)
+            wins_with = (df_with["Result"] == "Win").sum()
+            win_rate_with = wins_with / games_with * 100 if games_with > 0 else 0
 
-    col1, col2 = st.columns(2)
+            games_without = len(df_without)
+            wins_without = (df_without["Result"] == "Win").sum()
+            win_rate_without = wins_without / games_without * 100 if games_without > 0 else None
+            win_rate_diff = (
+                win_rate_with - win_rate_without
+                if win_rate_without is not None
+                else None
+            )
 
-    with col1:
-        st.subheader(f"✅ {selected_card_ja} あり")
-        total_w = len(df_with)
-        if total_w > 0:
-            wins_w = (df_with["Result"] == "Win").sum()
-            rate_w = wins_w / total_w * 100
-            st.metric("勝率", f"{rate_w:.1f}%")
-            st.metric("試合数", f"{total_w}戦")
-        else:
-            st.info("該当データなし")
+            card_rows.append({
+                "カード": translate_card(card),
+                "登場試合数": games_with,
+                "勝利数": wins_with,
+                "こちらの勝率": round(win_rate_with, 1),
+                "カードなし勝率": round(win_rate_without, 1) if win_rate_without is not None else None,
+                "勝率差": round(win_rate_diff, 1) if win_rate_diff is not None else None,
+            })
 
-    with col2:
-        st.subheader(f"❌ {selected_card_ja} なし")
-        total_wo = len(df_without)
-        if total_wo > 0:
-            wins_wo = (df_without["Result"] == "Win").sum()
-            rate_wo = wins_wo / total_wo * 100
-            st.metric("勝率", f"{rate_wo:.1f}%")
-            st.metric("試合数", f"{total_wo}戦")
-        else:
-            st.info("該当データなし")
+        card_stats = pd.DataFrame(card_rows).sort_values(
+            ["こちらの勝率", "登場試合数"],
+            ascending=[True, False],
+        ).reset_index(drop=True)
+        card_stats.index += 1
 
-    if len(df_with) > 0 and len(df_without) > 0:
-        diff = rate_w - rate_wo
-        if diff > 0:
-            st.success(f"📈 {selected_card_ja} がいる方が **+{diff:.1f}%** 勝ちやすい")
-        elif diff < 0:
-            st.error(f"📉 {selected_card_ja} がいると **{diff:.1f}%** 勝率が下がる（天敵候補）")
-        else:
-            st.info("勝率に差はありません")
+        st.dataframe(
+            card_stats[
+                ["カード", "登場試合数", "勝利数", "こちらの勝率", "カードなし勝率", "勝率差"]
+            ].style.format({
+                "こちらの勝率": "{:.1f}%",
+                "カードなし勝率": "{:.1f}%",
+                "勝率差": "{:+.1f}pt",
+            }, na_rep="-"),
+            use_container_width=True,
+            height=min(600, 35 * len(card_stats) + 38),
+        )
 
 
 # ==========================================
