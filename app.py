@@ -22,6 +22,7 @@ load_dotenv()
 ARCHETYPE_SHEET_NAME = "Archetype_Dict"
 SYSTEM_SHEETS = {"Archetype_Dict", "CardMaster"}
 TOWER_COLUMNS = ["MyTower", "OpponentTower"]
+JST_OFFSET_HOURS = 9
 
 # ==========================================
 # ページ設定
@@ -92,7 +93,12 @@ def load_player_data(spreadsheet_key: str, sheet_name: str) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = "Unknown"
         df[col] = df[col].replace("", "Unknown").fillna("Unknown")
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"], format="%Y/%m/%d %H:%M")
+    # Spreadsheet timestamps are stored in UTC. Convert once at load time so all
+    # dashboard grouping, sorting, and display logic uses JST.
+    df["Timestamp"] = (
+        pd.to_datetime(df["Timestamp"], format="%Y/%m/%d %H:%M")
+        + pd.Timedelta(hours=JST_OFFSET_HOURS)
+    )
     df["MyCrowns"] = pd.to_numeric(df["MyCrowns"], errors="coerce")
     df["OpponentCrowns"] = pd.to_numeric(df["OpponentCrowns"], errors="coerce")
     df["MyTrophy"] = pd.to_numeric(df["MyTrophy"], errors="coerce")
