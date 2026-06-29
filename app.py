@@ -142,10 +142,11 @@ def load_seasons(spreadsheet_key: str) -> pd.DataFrame:
     if not records:
         return pd.DataFrame(columns=["SeasonNo", "StartDate", "EndDate"])
     df = pd.DataFrame(records)
-    df["StartDate"] = pd.to_datetime(df["StartDate"], errors="coerce")
-    df["EndDate"] = pd.to_datetime(df["EndDate"], errors="coerce")
+    df["SeasonNo"] = df["SeasonNo"].astype(str).str.strip()
+    df["StartDate"] = pd.to_datetime(df["StartDate"], format="%Y/%m/%d %H:%M", errors="coerce")
+    df["EndDate"] = pd.to_datetime(df["EndDate"], format="%Y/%m/%d %H:%M", errors="coerce")
     df = df.dropna(subset=["SeasonNo", "StartDate", "EndDate"])
-    df = df.sort_values("SeasonNo").reset_index(drop=True)
+    df = df.sort_values("StartDate").reset_index(drop=True)
     return df
 
 
@@ -230,8 +231,8 @@ def main():
     season_labels = ["全期間"]
     for _, row in seasons_df.iterrows():
         label = (
-            f"シーズン{int(row['SeasonNo'])} "
-            f"({row['StartDate'].strftime('%Y/%m/%d')}〜{row['EndDate'].strftime('%Y/%m/%d')})"
+            f"{row['SeasonNo']} "
+            f"({row['StartDate'].strftime('%Y/%m/%d %H:%M')}〜{row['EndDate'].strftime('%Y/%m/%d %H:%M')})"
         )
         season_labels.append(label)
 
@@ -290,7 +291,7 @@ def main():
         season_idx = season_labels.index(selected_season) - 1  # "全期間" の分を引く
         season_row = seasons_df.iloc[season_idx]
         start_dt = season_row["StartDate"]
-        end_dt = season_row["EndDate"] + pd.Timedelta(hours=23, minutes=59, seconds=59)
+        end_dt = season_row["EndDate"]
         df = df_all[
             (df_all["Timestamp"] >= start_dt) & (df_all["Timestamp"] <= end_dt)
         ].copy()
