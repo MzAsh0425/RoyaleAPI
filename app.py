@@ -20,7 +20,8 @@ from card_names_ja import translate_card, translate_deck
 load_dotenv()
 
 ARCHETYPE_SHEET_NAME = "Archetype_Dict"
-SYSTEM_SHEETS = {"Archetype_Dict", "CardMaster"}
+SEASONS_SHEET_NAME = "Seasons"
+SYSTEM_SHEETS = {"Archetype_Dict", "CardMaster", "Seasons"}
 TOWER_COLUMNS = ["MyTower", "OpponentTower"]
 JST_OFFSET_HOURS = 9
 
@@ -125,6 +126,29 @@ def load_archetype_dict(spreadsheet_key: str) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
+@st.cache_data(ttl=3600)
+def load_seasons(spreadsheet_key: str) -> pd.DataFrame:
+    """Seasonsシートを読み込む。存在しなければ新規作成して空DataFrameを返す。"""
+    gc = _get_gspread_client()
+    sh = gc.open_by_key(spreadsheet_key)
+    try:
+        ws = sh.worksheet(SEASONS_SHEET_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title=SEASONS_SHEET_NAME, rows=20, cols=3)
+        ws.append_row(["SeasonNo", "StartDate", "EndDate"])
+        return pd.DataFrame(columns=["SeasonNo", "StartDate", "EndDate"])
+
+    records = ws.get_all_records()
+    if not records:
+        return pd.DataFrame(columns=["SeasonNo", "StartDate", "EndDate"])
+    df = pd.DataFrame(records)
+    df["StartDate"] = pd.to_datetime(df["StartDate"], errors="coerce")
+    df["EndDate"] = pd.to_datetime(df["EndDate"], errors="coerce")
+    df = df.dropna(subset=["SeasonNo", "StartDate", "EndDate"])
+    df = df.sort_values("SeasonNo").reset_index(drop=True)
+    return df
+
+
 # ==========================================
 # 時間帯分類
 # ==========================================
@@ -190,18 +214,61 @@ def main():
         st.error(f"アーキタイプ辞書の読み込みに失敗しました: {e}")
         archetype_df = pd.DataFrame(columns=["Archetype", "KeyCards"])
 
+    # シーズンデータの読み込み
+    try:
+        seasons_df = load_seasons(spreadsheet_key)
+    except Exception as e:
+        st.error(f"シーズンデータの読み込みに失敗しました: {e}")
+        seasons_df = pd.DataFrame(columns=["SeasonNo", "StartDate", "EndDate"])
+
     # ------------------------------------------
     # サイドバー
     # ------------------------------------------
     st.sidebar.title("🎮 分析設定")
     selected_player = st.sidebar.selectbox("プレイヤーを選択", player_sheets)
 
-    range_options = {"全期間": 0, "直近20戦": 20, "直近50戦": 50, "直近100戦": 100}
-    selected_range = st.sidebar.selectbox("データ範囲", list(range_options.keys()))
+    season_labels = ["全期間"]
+    for _, row in seasons_df.iterrows():
+        label = (
+            f"シーズン{int(row['SeasonNo'])} "
+            f"({row['StartDate'].strftime('%Y/%m/%d')}〜{row['EndDate'].strftime('%Y/%m/%d')})"
+        )
+        season_labels.append(label)
+
+    selected_season = st.sidebar.selectbox("シーズン", season_labels)
+
+    # ------------------------------------------
+    # データ読み込み（ゲームモード選択肢取得のため先行して実施）
+    # ------------------------------------------
+    try:
+        df_all = load_player_data(spreadsheet_key, selected_player)
+    except Exception as e:
+        st.error(f"データの読み込みに失敗しました: {e}")
+        return
+
+    if df_all.empty:
+        st.warning(f"'{selected_player}' のデータがありません。")
+        return
+
+    # ゲームモード選択
+    available_modes = sorted(df_all["GameMode"].dropna().unique().tolist())
+    game_mode_options = ["すべて"] + available_modes
+    selected_mode = st.sidebar.selectbox("ゲームモード", game_mode_options)
 
     if st.sidebar.button("🔄 データを再読み込み"):
         st.cache_data.clear()
         st.rerun()
+
+    # シーズンの状態をサイドバーに表示
+    st.sidebar.divider()
+    st.sidebar.subheader("📅 シーズン")
+    if seasons_df.empty:
+        st.sidebar.warning(
+            f"シーズンが未定義です。スプレッドシートの '{SEASONS_SHEET_NAME}' シートに"
+            " SeasonNo / StartDate / EndDate を記入してください。"
+        )
+    else:
+        st.sidebar.success(f"{len(seasons_df)} シーズン読み込み済み")
 
     # 辞書の状態をサイドバーに表示
     st.sidebar.divider()
@@ -215,20 +282,21 @@ def main():
         st.sidebar.dataframe(archetype_df, use_container_width=True, hide_index=True)
 
     # ------------------------------------------
-    # データ読み込み
+    # フィルタリング
     # ------------------------------------------
-    try:
-        df_all = load_player_data(spreadsheet_key, selected_player)
-    except Exception as e:
-        st.error(f"データの読み込みに失敗しました: {e}")
-        return
+    if selected_season == "全期間":
+        df = df_all.copy()
+    else:
+        season_idx = season_labels.index(selected_season) - 1  # "全期間" の分を引く
+        season_row = seasons_df.iloc[season_idx]
+        start_dt = season_row["StartDate"]
+        end_dt = season_row["EndDate"] + pd.Timedelta(hours=23, minutes=59, seconds=59)
+        df = df_all[
+            (df_all["Timestamp"] >= start_dt) & (df_all["Timestamp"] <= end_dt)
+        ].copy()
 
-    if df_all.empty:
-        st.warning(f"'{selected_player}' のデータがありません。")
-        return
-
-    n = range_options[selected_range]
-    df = df_all.head(n) if n > 0 else df_all.copy()
+    if selected_mode != "すべて":
+        df = df[df["GameMode"] == selected_mode].copy()
 
     # アーキタイプ列を事前計算
     df["OppArchetype"] = df["OpponentDeck_Raw"].apply(
@@ -236,7 +304,8 @@ def main():
     )
 
     st.title(f"⚔️ {selected_player} の戦績分析")
-    st.caption(f"総試合数: {len(df_all)}戦 ／ 表示中: {len(df)}戦（{selected_range}）")
+    mode_label = selected_mode if selected_mode != "すべて" else "全モード"
+    st.caption(f"総試合数: {len(df_all)}戦 ／ 表示中: {len(df)}戦（{selected_season} / {mode_label}）")
 
     # ------------------------------------------
     # タブ構成
